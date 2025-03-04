@@ -88,6 +88,9 @@ void tx_draw_rec(TxRectangle rec);
 /// Draw a filled in rectangle
 void tx_fill_rec(TxRectangle rec);
 
+/// Draw a character at a position
+void tx_draw_char(uint32_t c, TxVector p);
+
 /// Draw some text at a position
 void tx_draw_text(const char *text, TxVector pos);
 
@@ -103,6 +106,7 @@ void tx_log(TxLogLevel lv, const char *restrict fmt, ...);
 bool tx_to_utf8(uint32_t c, char buf[static 5]);
 
 TxVector TxVector_add(TxVector a, TxVector b);
+TxVector TxVector_mul(TxVector a, TxVector b);
 
 #endif // _TEMEX_H_
 
@@ -136,8 +140,6 @@ static void     tx_show_cursor_(void);
 static bool     tx_get_screen_size_(uint16_t *x, uint16_t *y);
 static TxVector tx_round_pos_(TxVector p);
 static int      tx_pos_to_idx_(TxVector p);
-static void     tx_set_cell_(uint32_t c, TxVector p);
-static void     tx_set_cell_by_idx_(uint32_t c, int idx);
 static int      tx_codepoint_length_(uint32_t c);
 static void     tx_move_cursor_to_origin_(void);
 
@@ -275,29 +277,29 @@ void tx_draw_rec(TxRectangle rec) {
     TxVector max = tx_round_pos_(TxVector_add(rec.pos, (TxVector){.x=rec.size.x, .y=rec.size.y}));
 
     // corners
-    tx_set_cell_(palette[2], min);
-    tx_set_cell_(palette[3], (TxVector){.x=max.x, .y=min.y, .z=min.z});
-    tx_set_cell_(palette[4], (TxVector){.x=min.x, .y=max.y, .z=min.z});
-    tx_set_cell_(palette[5], max);
+    tx_draw_char(palette[2], min);
+    tx_draw_char(palette[3], (TxVector){.x=max.x, .y=min.y, .z=min.z});
+    tx_draw_char(palette[4], (TxVector){.x=min.x, .y=max.y, .z=min.z});
+    tx_draw_char(palette[5], max);
 
     // left edge
     for (float y = min.y + 1.f; y < max.y; y += 1.f) {
-        tx_set_cell_(palette[1], (TxVector){.x=min.x, .y=y, .z=min.z});
+        tx_draw_char(palette[1], (TxVector){.x=min.x, .y=y, .z=min.z});
     }
 
     // top edge
     for (float x = min.x + 1.f; x < max.x; x += 1.f) {
-        tx_set_cell_(palette[0], (TxVector){.x=x, .y=min.y, .z=min.z});
+        tx_draw_char(palette[0], (TxVector){.x=x, .y=min.y, .z=min.z});
     }
 
     // right edge
     for (float y = min.y + 1.f; y < max.y; y += 1.f) {
-        tx_set_cell_(palette[1], (TxVector){.x=max.x, .y=y, .z=min.z});
+        tx_draw_char(palette[1], (TxVector){.x=max.x, .y=y, .z=min.z});
     }
 
     // bottom edge
     for (float x = min.x + 1.f; x < max.x; x += 1.f) {
-        tx_set_cell_(palette[0], (TxVector){.x=x, .y=max.y, .z=min.z});
+        tx_draw_char(palette[0], (TxVector){.x=x, .y=max.y, .z=min.z});
     }
 }
 
@@ -318,38 +320,44 @@ void tx_fill_rec(TxRectangle rec) {
     TxVector max = tx_round_pos_(TxVector_add(rec.pos, (TxVector){.x=rec.size.x, .y=rec.size.y}));
 
     // corners
-    tx_set_cell_(palette[5], min);
-    tx_set_cell_(palette[6], (TxVector){.x=max.x, .y=min.y, .z=min.z});
-    tx_set_cell_(palette[7], (TxVector){.x=min.x, .y=max.y, .z=min.z});
-    tx_set_cell_(palette[8], max);
+    tx_draw_char(palette[5], min);
+    tx_draw_char(palette[6], (TxVector){.x=max.x, .y=min.y, .z=min.z});
+    tx_draw_char(palette[7], (TxVector){.x=min.x, .y=max.y, .z=min.z});
+    tx_draw_char(palette[8], max);
 
     // left edge
     for (float y = min.y + 1.f; y < max.y; y += 1.f) {
-        tx_set_cell_(palette[3], (TxVector){.x=min.x, .y=y, .z=min.z});
+        tx_draw_char(palette[3], (TxVector){.x=min.x, .y=y, .z=min.z});
     }
 
     // top edge
     for (float x = min.x + 1.f; x < max.x; x += 1.f) {
-        tx_set_cell_(palette[0], (TxVector){.x=x, .y=min.y, .z=min.z});
+        tx_draw_char(palette[0], (TxVector){.x=x, .y=min.y, .z=min.z});
     }
 
     // right edge
     for (float y = min.y + 1.f; y < max.y; y += 1.f) {
-        tx_set_cell_(palette[2], (TxVector){.x=max.x, .y=y, .z=min.z});
+        tx_draw_char(palette[2], (TxVector){.x=max.x, .y=y, .z=min.z});
     }
 
 
     // bottom edge
     for (float x = min.x + 1.f; x < max.x; x += 1.f) {
-        tx_set_cell_(palette[1], (TxVector){.x=x, .y=max.y, .z=min.z});
+        tx_draw_char(palette[1], (TxVector){.x=x, .y=max.y, .z=min.z});
     }
 
     // fill
     for (float y = min.y + 1.f; y <= max.y - 1.f; y += 1.f) {
         for (float x = min.x + 1.f; x <= max.x - 1.f; x += 1.f) {
-            tx_set_cell_(palette[4], (TxVector){.x=x, .y=y, .z=min.z});
+            tx_draw_char(palette[4], (TxVector){.x=x, .y=y, .z=min.z});
         }
     }
+}
+
+void tx_draw_char(uint32_t c, TxVector p) {
+    int idx = tx_pos_to_idx_(p);
+    if (TX_.depth_buffer[idx] > p.z) return;
+    TX_.screen[idx] = c;
 }
 
 void tx_draw_text(const char *text, TxVector pos) {
@@ -359,7 +367,7 @@ void tx_draw_text(const char *text, TxVector pos) {
         if (idx >= TX_.screen_width * TX_.screen_height) {
             break;
         }
-        tx_set_cell_by_idx_(text[i], idx);
+        TX_.screen[idx] = text[i];
         idx++;
     }
 }
@@ -427,6 +435,13 @@ TxVector TxVector_add(TxVector a, TxVector b) {
     };
 }
 
+TxVector TxVector_mul(TxVector a, TxVector b) {
+    return (TxVector) {
+        .x = a.x * b.x,
+        .y = a.y * b.y,
+    };
+}
+
 static bool tx_enable_raw_mode_(void) {
     if (tcgetattr(STDIN_FILENO, &TX_.default_termios) == -1) {
         tx_error("Failed to save default state of terminal");
@@ -490,7 +505,7 @@ static bool tx_get_screen_size_(uint16_t *w, uint16_t *h) {
         return false;
     }
 
-    *w = ws.ws_col;
+    *w = ws.ws_col - 1;
     *h = ws.ws_row - 1;
 
     close(fd);
@@ -509,16 +524,6 @@ static int tx_pos_to_idx_(TxVector p) {
     int x = (int)roundf(p.x);
     int y = (int)roundf(p.y);
     return x + y * TX_.screen_width;
-}
-
-static void tx_set_cell_(uint32_t c, TxVector p) {
-    int idx = tx_pos_to_idx_(p);
-    if (TX_.depth_buffer[idx] > p.z) return;
-    tx_set_cell_by_idx_(c, idx);
-}
-
-static void tx_set_cell_by_idx_(uint32_t c, int idx) {
-    TX_.screen[idx] = c;
 }
 
 static int tx_codepoint_length_(uint32_t c) {
