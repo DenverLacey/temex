@@ -14,9 +14,7 @@ int main(void) {
 
     for (;;) {
         tx_poll_events();
-        char buf[5] = {0};
-        read(STDIN_FILENO, buf, 5);
-        if (strcmp(buf, "q") == 0 || tx_is_key_pressed(TxKeyCode_ESC)) {
+        if (tx_is_key_pressed(TxKeyCode_ESC)) {
             break;
         }
 

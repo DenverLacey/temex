@@ -31,8 +31,10 @@ typedef enum TxLogLevel {
 
 /// Key code enum
 typedef enum TxKeyCode {
-    TxKeyCode_ESC,
-    TxKeyCode_COUNT,
+    TxKeyCode_BACKSPACE = 8,
+    TxKeyCode_ESC       = 27,
+    TxKeyCode_DELETE    = 127,
+    TxKeyCode_COUNT     = 256,
 } TxKeyCode;
 
 typedef uint8_t TxKeyState;
@@ -71,6 +73,9 @@ bool tx_is_key_held(TxKeyCode key);
 /// Test if a given key has been released
 bool tx_is_key_released(TxKeyCode key);
 
+/// Iterate over all keys pressed this frame
+bool tx_pressed_keys(uint32_t *c);
+
 /// Renders screen to the terminal
 void tx_render_to_terminal(void);
 
@@ -82,6 +87,9 @@ void tx_draw_rec(TxRectangle rec);
 
 /// Draw a filled in rectangle
 void tx_fill_rec(TxRectangle rec);
+
+/// Draw some text at a position
+void tx_draw_text(const char *text, TxVector pos);
 
 /// Set the minimum log level to log
 void tx_set_log_level(TxLogLevel lv);
@@ -129,6 +137,7 @@ static bool     tx_get_screen_size_(uint16_t *x, uint16_t *y);
 static TxVector tx_round_pos_(TxVector p);
 static int      tx_pos_to_idx_(TxVector p);
 static void     tx_set_cell_(uint32_t c, TxVector p);
+static void     tx_set_cell_by_idx_(uint32_t c, int idx);
 static int      tx_codepoint_length_(uint32_t c);
 static void     tx_move_cursor_to_origin_(void);
 
@@ -183,6 +192,23 @@ uint16_t tx_get_screen_height(void) {
 }
 
 void tx_poll_events(void) {
+    bool keys[256] = {0};
+
+    char c = 0;
+    while (read(STDIN_FILENO, &c, 1) == 1) {
+        keys[(int)c] = true;
+    }
+
+    for (int i = 0; i < 256; i++) {
+        if (keys[i] == false) {
+            if (TX_.keys[i] & TxKeyState_HELD) TX_.keys[i] = TxKeyState_RELEASED;
+            else                               TX_.keys[i] = 0;
+        } else {
+            if (TX_.keys[i] & TxKeyState_PRESSED)   TX_.keys[i] = TxKeyState_HELD;
+            else if (TX_.keys[i] & TxKeyState_HELD) TX_.keys[i] = TxKeyState_HELD;
+            else                                    TX_.keys[i] = TxKeyState_PRESSED;
+        }
+    }
 }
 
 bool tx_is_key_pressed(TxKeyCode key) {
@@ -195,6 +221,15 @@ bool tx_is_key_held(TxKeyCode key) {
 
 bool tx_is_key_released(TxKeyCode key) {
     return TX_.keys[key] & TxKeyState_RELEASED;
+}
+
+bool tx_pressed_keys(uint32_t *c) {
+    (*c)++;
+    for (; *c < 256; (*c)++) {
+        if (TX_.keys[*c] & TxKeyState_PRESSED)
+            return true;
+    }
+    return false;
 }
 
 void tx_render_to_terminal(void) {
@@ -220,8 +255,6 @@ void tx_render_to_terminal(void) {
 
         printf("\r\n");
     }
-
-    usleep(100000);
 }
 
 void tx_clear_screen(void) {
@@ -319,6 +352,18 @@ void tx_fill_rec(TxRectangle rec) {
     }
 }
 
+void tx_draw_text(const char *text, TxVector pos) {
+    int text_len = strlen(text);
+    int idx = tx_pos_to_idx_(pos);
+    for (int i = 0; i < text_len; i++) {
+        if (idx >= TX_.screen_width * TX_.screen_height) {
+            break;
+        }
+        tx_set_cell_by_idx_(text[i], idx);
+        idx++;
+    }
+}
+
 void tx_set_log_level(TxLogLevel lv) {
     TX_.log_level = lv;
 }
@@ -336,9 +381,9 @@ void tx_log(TxLogLevel lv, const char *restrict fmt, ...) {
     va_list args;
     va_start(args, fmt);
     {
-        printf("%s: ", level_labels[lv]);
-        vprintf(fmt, args);
-        printf("\n");
+        fprintf(stderr, "%s: ", level_labels[lv]);
+        vfprintf(stderr, fmt, args);
+        fprintf(stderr, "\n");
     }
     va_end(args);
 }
@@ -391,12 +436,12 @@ static bool tx_enable_raw_mode_(void) {
     atexit(tx_disable_raw_mode_);
 
     struct termios raw = TX_.default_termios;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | IXON);
-    raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 1;
+    raw.c_iflag     &= ~(BRKINT | ICRNL | INPCK | IXON);
+    raw.c_oflag     &= ~(OPOST);
+    raw.c_cflag     |= (CS8);
+    raw.c_lflag     &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN]  = 0;
+    raw.c_cc[VTIME] = 0;
 
     if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
         tx_error("Failed to enable raw mode");
@@ -469,6 +514,10 @@ static int tx_pos_to_idx_(TxVector p) {
 static void tx_set_cell_(uint32_t c, TxVector p) {
     int idx = tx_pos_to_idx_(p);
     if (TX_.depth_buffer[idx] > p.z) return;
+    tx_set_cell_by_idx_(c, idx);
+}
+
+static void tx_set_cell_by_idx_(uint32_t c, int idx) {
     TX_.screen[idx] = c;
 }
 
