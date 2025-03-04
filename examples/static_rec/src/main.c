@@ -14,7 +14,9 @@ int main(void) {
 
     for (;;) {
         tx_poll_events();
-        if (tx_is_key_pressed(TxKeyCode_ESC)) {
+        char buf[5] = {0};
+        read(STDIN_FILENO, buf, 5);
+        if (strcmp(buf, "q") == 0 || tx_is_key_pressed(TxKeyCode_ESC)) {
             break;
         }
 
@@ -25,7 +27,6 @@ int main(void) {
         tx_draw_rec((TxRectangle){.pos=(TxVector){.x=13, .y=7}, .size=(TxVector){.x=10, .y=5}});
 
         tx_render_to_terminal();
-        break;
     }
 
     tx_restore_terminal();

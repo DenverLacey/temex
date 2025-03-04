@@ -45,7 +45,7 @@ typedef uint8_t TxKeyState;
 // +==============================================================================================+
 
 /// Prepare terminal to act like a graphical window
-void tx_prepare_terminal(void);
+bool tx_prepare_terminal(void);
 
 /// Restore terminal to default state
 void tx_restore_terminal(void);
@@ -112,99 +112,120 @@ TxVector TxVector_add(TxVector a, TxVector b);
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 
 // +==============================================================================================+
 // | Forward Declarations                                                                         |
 // +==============================================================================================+
 
+static bool     tx_enable_raw_mode_(void);
+static void     tx_disable_raw_mode_(void);
+static void     tx_enter_alt_screen_(void);
+static void     tx_exit_alt_screen_(void);
+static void     tx_hide_cursor_(void);
+static void     tx_show_cursor_(void);
 static bool     tx_get_screen_size_(uint16_t *x, uint16_t *y);
 static TxVector tx_round_pos_(TxVector p);
 static int      tx_pos_to_idx_(TxVector p);
 static void     tx_set_cell_(uint32_t c, TxVector p);
 static int      tx_codepoint_length_(uint32_t c);
+static void     tx_move_cursor_to_origin_(void);
 
 struct TxState_ {
     TxLogLevel log_level;
     uint16_t   screen_width, screen_height;
     uint32_t * screen;
     float *    depth_buffer;
+    struct termios default_termios;
     TxKeyState keys[TxKeyCode_COUNT];
-} tx_state_;
+} TX_;
 
-void tx_prepare_terminal(void) {
-    if (!tx_get_screen_size_(&tx_state_.screen_width, &tx_state_.screen_height)) {
-        return;
+bool tx_prepare_terminal(void) {
+    // Get screen information
+    if (!tx_get_screen_size_(&TX_.screen_width, &TX_.screen_height)) {
+        return false;
     }
 
-    tx_state_.screen = calloc(tx_state_.screen_width * tx_state_.screen_height, sizeof(*tx_state_.screen));
-    if (!tx_state_.screen) {
+    // Allocate buffers
+    TX_.screen = calloc(TX_.screen_width * TX_.screen_height, sizeof(*TX_.screen));
+    if (!TX_.screen) {
         tx_error("Failed to allocate screen");
-        return;
+        return false;
     }
 
-    tx_state_.depth_buffer = calloc(tx_state_.screen_width * tx_state_.screen_height, sizeof(*tx_state_.depth_buffer));
-    if (!tx_state_.depth_buffer) {
+    TX_.depth_buffer = calloc(TX_.screen_width * TX_.screen_height, sizeof(*TX_.depth_buffer));
+    if (!TX_.depth_buffer) {
         tx_error("Failed to allocate depth buffer");
-        return;
+        return false;
     }
 
-    // TODO: Enable raw mode for terminal and shift to alt-screen
+    if (!tx_enable_raw_mode_()) {
+        return false;
+    }
+
+    tx_hide_cursor_();
+
+    return true;
 }
 
 void tx_restore_terminal(void) {
-    free(tx_state_.screen);
-    free(tx_state_.depth_buffer);
+    free(TX_.screen);
+    free(TX_.depth_buffer);
 }
 
 uint16_t tx_get_screen_width(void) {
-    return tx_state_.screen_width;
+    return TX_.screen_width;
 }
 
 uint16_t tx_get_screen_height(void) {
-    return tx_state_.screen_height;
+    return TX_.screen_height;
 }
 
 void tx_poll_events(void) {
 }
 
 bool tx_is_key_pressed(TxKeyCode key) {
-    return tx_state_.keys[key] & TxKeyState_PRESSED;
+    return TX_.keys[key] & TxKeyState_PRESSED;
 }
 
 bool tx_is_key_held(TxKeyCode key) {
-    return tx_state_.keys[key] & TxKeyState_HELD;
+    return TX_.keys[key] & TxKeyState_HELD;
 }
 
 bool tx_is_key_released(TxKeyCode key) {
-    return tx_state_.keys[key] & TxKeyState_RELEASED;
+    return TX_.keys[key] & TxKeyState_RELEASED;
 }
 
 void tx_render_to_terminal(void) {
-    char character_buffer[5] = {0};
-    for (int y = 0; y < tx_state_.screen_height; y++) {
-        for (int x = 0; x < tx_state_.screen_width; x++) {
-            uint32_t c = tx_state_.screen[x + y * tx_state_.screen_width];
+    tx_move_cursor_to_origin_();
+
+    char cbuf[5] = {0};
+    for (int y = 0; y < TX_.screen_height; y++) {
+        for (int x = 0; x < TX_.screen_width; x++) {
+            uint32_t c = TX_.screen[x + y * TX_.screen_width];
             if (c == 0) {
                 printf(" ");
                 continue;
             }
 
-            if (!tx_to_utf8(c, character_buffer)) {
+            if (!tx_to_utf8(c, cbuf)) {
                 tx_error("Failed to encode character to UTF-8: 0x%X", c);
                 tx_clear_screen();
                 return;
             }
 
-            printf("%s", character_buffer);
+            printf("%s", cbuf);
         }
 
         printf("\r\n");
     }
+
+    usleep(100000);
 }
 
 void tx_clear_screen(void) {
-    memset(tx_state_.screen, 0, (tx_state_.screen_width * tx_state_.screen_height) * sizeof(*tx_state_.screen));
+    memset(TX_.screen, 0, (TX_.screen_width * TX_.screen_height) * sizeof(*TX_.screen));
 }
 
 void tx_draw_rec(TxRectangle rec) {
@@ -299,7 +320,7 @@ void tx_fill_rec(TxRectangle rec) {
 }
 
 void tx_set_log_level(TxLogLevel lv) {
-    tx_state_.log_level = lv;
+    TX_.log_level = lv;
 }
 
 void tx_log(TxLogLevel lv, const char *restrict fmt, ...) {
@@ -361,6 +382,54 @@ TxVector TxVector_add(TxVector a, TxVector b) {
     };
 }
 
+static bool tx_enable_raw_mode_(void) {
+    if (tcgetattr(STDIN_FILENO, &TX_.default_termios) == -1) {
+        tx_error("Failed to save default state of terminal");
+        return false;
+    }
+
+    atexit(tx_disable_raw_mode_);
+
+    struct termios raw = TX_.default_termios;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | IXON);
+    raw.c_oflag &= ~(OPOST);
+    raw.c_cflag |= (CS8);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 1;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) == -1) {
+        tx_error("Failed to enable raw mode");
+        return false;
+    }
+
+    tx_enter_alt_screen_();
+
+    return true;
+}
+
+static void tx_disable_raw_mode_(void) {
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &TX_.default_termios);
+    tx_exit_alt_screen_();
+    tx_show_cursor_();
+}
+
+static void tx_enter_alt_screen_(void) {
+    printf("\x1b[?1049h");
+}
+
+static void tx_exit_alt_screen_(void) {
+    printf("\x1b[?1049l");
+}
+
+static void tx_hide_cursor_(void) {
+    printf("\033[?25l");
+}
+
+static void tx_show_cursor_(void) {
+    printf("\033[?25h");
+}
+
 static bool tx_get_screen_size_(uint16_t *w, uint16_t *h) {
     int fd = open("/dev/tty", O_RDWR);
     if (fd < 0) {
@@ -377,7 +446,7 @@ static bool tx_get_screen_size_(uint16_t *w, uint16_t *h) {
     }
 
     *w = ws.ws_col;
-    *h = ws.ws_row;
+    *h = ws.ws_row - 1;
 
     close(fd);
     return true;
@@ -394,13 +463,13 @@ static TxVector tx_round_pos_(TxVector p) {
 static int tx_pos_to_idx_(TxVector p) {
     int x = (int)roundf(p.x);
     int y = (int)roundf(p.y);
-    return x + y * tx_state_.screen_width;
+    return x + y * TX_.screen_width;
 }
 
 static void tx_set_cell_(uint32_t c, TxVector p) {
-    int cell = tx_pos_to_idx_(p);
-    if (tx_state_.depth_buffer[cell] > p.z) return;
-    tx_state_.screen[cell] = c;
+    int idx = tx_pos_to_idx_(p);
+    if (TX_.depth_buffer[idx] > p.z) return;
+    TX_.screen[idx] = c;
 }
 
 static int tx_codepoint_length_(uint32_t c) {
@@ -415,6 +484,10 @@ static int tx_codepoint_length_(uint32_t c) {
     } else {
         return 0;
     }
+}
+
+static void tx_move_cursor_to_origin_(void) {
+    printf("\x1b[H");
 }
 
 #endif // _TEMEX_H_IMPLEMENTATION_

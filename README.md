@@ -6,7 +6,7 @@ The library uses unicode characters to create various shapes using only characte
 
 # Getting Started
 
-To get started, all you have to do is add the file `temex.h` to you project and include it.  
+To get started, all you have to do is add the file `temex.h` to your project and include it.  
 **NOTE**: You must define `TX_IMPLEMENTATION` exactly **once** in your whole project. Typically in your main file is good.
 
 ```c
