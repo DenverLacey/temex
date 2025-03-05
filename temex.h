@@ -205,18 +205,11 @@ static bool tx_macos_enable_event_tap(void);
 static CGEventRef tx_macos_CGEvent_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void* refcon);
 #endif // __APPLE__
 
-typedef struct TxState_MACOS_ {
-    CFRunLoopSourceRef run_loop_src;
-} TxState_MACOS_;
-
 struct TxState_ {
     TxLogLevel     log_level;
     uint16_t       screen_width, screen_height;
     uint32_t *     screen;
     float *        depth_buffer;
-#ifdef __APPLE__
-    TxState_MACOS_ macos;
-#endif
     struct termios default_termios;
     TxKeyState     keys[TxKeyCode_COUNT];
 } TX_;
@@ -259,8 +252,14 @@ void tx_restore_terminal(void) {
 
 #ifdef __APPLE__
     CFRunLoopStop(CFRunLoopGetCurrent());
-    CFRunLoopRemoveSource(CFRunLoopGetCurrent(), TX_.macos.run_loop_src, kCFRunLoopDefaultMode);
-    CFRunLoopSourceInvalidate(TX_.macos.run_loop_src);
+    
+    // Send extra 'a' key to wake up normal keyboard events
+    CGEventRef keydown = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)0, true);
+    CGEventPost(kCGEventNull, keydown);
+    CFRelease(keydown);
+    CGEventRef keyup = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)0, false);
+    CGEventPost(kCGEventNull, keyup);
+    CFRelease(keyup);
 #endif
 }
 
@@ -785,8 +784,8 @@ static bool tx_macos_enable_event_tap(void) {
         return false;
     }
 
-    TX_.macos.run_loop_src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, event_tap, 0);
-    CFRunLoopAddSource(CFRunLoopGetCurrent(), TX_.macos.run_loop_src, kCFRunLoopDefaultMode);
+    CFRunLoopSourceRef run_loop_src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, event_tap, 0);
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), run_loop_src, kCFRunLoopDefaultMode);
     CGEventTapEnable(event_tap, true);
 
     return true;
