@@ -31,10 +31,60 @@ typedef enum TxLogLevel {
 
 /// Key code enum
 typedef enum TxKeyCode {
-    TxKeyCode_BACKSPACE = 8,
-    TxKeyCode_ESC       = 27,
-    TxKeyCode_DELETE    = 127,
-    TxKeyCode_COUNT     = 256,
+    TxKeyCode_DELETE       = 127,
+    TxKeyCode_BACKSPACE,
+    TxKeyCode_TAB,
+    TxKeyCode_ENTER,
+    TxKeyCode_ESC,
+    TxKeyCode_PLUS,
+    TxKeyCode_DECIMAL,
+    TxKeyCode_CLEAR,
+    TxKeyCode_DIVIDE,
+    TxKeyCode_HYPHEN,
+    TxKeyCode_EQUALS,
+    TxKeyCode_RIGHT_CMD,
+    TxKeyCode_LEFT_CMD,
+    TxKeyCode_LEFT_SHIFT,
+    TxKeyCode_RIGHT_SHIFT,
+    TxKeyCode_LEFT_CTRL,
+    TxKeyCode_RIGHT_CTRL,
+    TxKeyCode_CAPS,
+    TxKeyCode_LEFT_OPTION,
+    TxKeyCode_RIGHT_OPTION,
+    TxKeyCode_VOLUME_UP,
+    TxKeyCode_VOLUME_DOWN,
+    TxKeyCode_VOLUME_MUTE,
+    TxKeyCode_FN,
+    TxKeyCode_F1,
+    TxKeyCode_F2,
+    TxKeyCode_F3,
+    TxKeyCode_F4,
+    TxKeyCode_F5,
+    TxKeyCode_F6,
+    TxKeyCode_F7,
+    TxKeyCode_F8,
+    TxKeyCode_F9,
+    TxKeyCode_F11,
+    TxKeyCode_F12,
+    TxKeyCode_F13,
+    TxKeyCode_F14,
+    TxKeyCode_F15,
+    TxKeyCode_F16,
+    TxKeyCode_F17,
+    TxKeyCode_F18,
+    TxKeyCode_F19,
+    TxKeyCode_F20,
+    TxKeyCode_F10,
+    TxKeyCode_HELP,
+    TxKeyCode_HOME,
+    TxKeyCode_END,
+    TxKeyCode_PG_UP,
+    TxKeyCode_PG_DOWN,
+    TxKeyCode_ARROW_LEFT,
+    TxKeyCode_ARROW_RIGHT,
+    TxKeyCode_ARROW_DOWN,
+    TxKeyCode_ARROW_UP,
+    TxKeyCode_COUNT        = 256,
 } TxKeyCode;
 
 typedef uint8_t TxKeyState;
@@ -127,29 +177,48 @@ TxVector TxVector_mul(TxVector a, TxVector b);
 #include <termios.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#include <ApplicationServices/ApplicationServices.h>
+#include <Carbon/Carbon.h>
+#endif // __APPLE__
+
 // +==============================================================================================+
 // | Forward Declarations                                                                         |
 // +==============================================================================================+
 
-static bool     tx_enable_raw_mode_(void);
-static void     tx_disable_raw_mode_(void);
-static void     tx_enter_alt_screen_(void);
-static void     tx_exit_alt_screen_(void);
-static void     tx_hide_cursor_(void);
-static void     tx_show_cursor_(void);
-static bool     tx_get_screen_size_(uint16_t *x, uint16_t *y);
-static TxVector tx_round_pos_(TxVector p);
-static int      tx_pos_to_idx_(TxVector p);
-static int      tx_codepoint_length_(uint32_t c);
-static void     tx_move_cursor_to_origin_(void);
+static bool      tx_enable_raw_mode_(void);
+static void      tx_disable_raw_mode_(void);
+static void      tx_enter_alt_screen_(void);
+static void      tx_exit_alt_screen_(void);
+static void      tx_hide_cursor_(void);
+static void      tx_show_cursor_(void);
+static bool      tx_get_screen_size_(uint16_t *x, uint16_t *y);
+static TxVector  tx_round_pos_(TxVector p);
+static int       tx_pos_to_idx_(TxVector p);
+static void      tx_set_cell_(int idx, uint32_t c, float z);
+static int       tx_codepoint_length_(uint32_t c);
+static void      tx_move_cursor_to_origin_(void);
+static TxKeyCode tx_convert_to_keycode(int code);
+
+#ifdef __APPLE__
+static bool tx_macos_enable_event_tap(void);
+static CGEventRef tx_macos_CGEvent_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void* refcon);
+#endif // __APPLE__
+
+typedef struct TxState_MACOS_ {
+    CFRunLoopSourceRef run_loop_src;
+} TxState_MACOS_;
 
 struct TxState_ {
-    TxLogLevel log_level;
-    uint16_t   screen_width, screen_height;
-    uint32_t * screen;
-    float *    depth_buffer;
+    TxLogLevel     log_level;
+    uint16_t       screen_width, screen_height;
+    uint32_t *     screen;
+    float *        depth_buffer;
+#ifdef __APPLE__
+    TxState_MACOS_ macos;
+#endif
     struct termios default_termios;
-    TxKeyState keys[TxKeyCode_COUNT];
+    TxKeyState     keys[TxKeyCode_COUNT];
 } TX_;
 
 bool tx_prepare_terminal(void) {
@@ -177,12 +246,22 @@ bool tx_prepare_terminal(void) {
 
     tx_hide_cursor_();
 
+#ifdef __APPLE__
+    tx_macos_enable_event_tap();
+#endif
+
     return true;
 }
 
 void tx_restore_terminal(void) {
     free(TX_.screen);
     free(TX_.depth_buffer);
+
+#ifdef __APPLE__
+    CFRunLoopStop(CFRunLoopGetCurrent());
+    CFRunLoopRemoveSource(CFRunLoopGetCurrent(), TX_.macos.run_loop_src, kCFRunLoopDefaultMode);
+    CFRunLoopSourceInvalidate(TX_.macos.run_loop_src);
+#endif
 }
 
 uint16_t tx_get_screen_width(void) {
@@ -194,6 +273,18 @@ uint16_t tx_get_screen_height(void) {
 }
 
 void tx_poll_events(void) {
+#ifdef _WIN32
+    #error "Polling events on Windows not yet supported"
+#elif __linux__
+    #error "Polling events on Linux not yet supported"
+#elif __APPLE__
+    for (int i = 0; i < TxKeyCode_COUNT; i++) {
+        if (TX_.keys[i] & TxKeyState_PRESSED)  TX_.keys[i] = TxKeyState_HELD;
+        if (TX_.keys[i] & TxKeyState_RELEASED) TX_.keys[i] = 0;
+    }
+    CFRunLoopRunResult result = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, TRUE);
+    (void)result; // TODO: Handle the result in case of failure
+#else
     bool keys[256] = {0};
 
     char c = 0;
@@ -211,6 +302,7 @@ void tx_poll_events(void) {
             else                                    TX_.keys[i] = TxKeyState_PRESSED;
         }
     }
+#endif
 }
 
 bool tx_is_key_pressed(TxKeyCode key) {
@@ -357,7 +449,7 @@ void tx_fill_rec(TxRectangle rec) {
 void tx_draw_char(uint32_t c, TxVector p) {
     int idx = tx_pos_to_idx_(p);
     if (TX_.depth_buffer[idx] > p.z) return;
-    TX_.screen[idx] = c;
+    tx_set_cell_(idx, c, p.z);
 }
 
 void tx_draw_text(const char *text, TxVector pos) {
@@ -367,7 +459,7 @@ void tx_draw_text(const char *text, TxVector pos) {
         if (idx >= TX_.screen_width * TX_.screen_height) {
             break;
         }
-        TX_.screen[idx] = text[i];
+        tx_set_cell_(idx, text[i], pos.z);
         idx++;
     }
 }
@@ -526,6 +618,11 @@ static int tx_pos_to_idx_(TxVector p) {
     return x + y * TX_.screen_width;
 }
 
+static void tx_set_cell_(int idx, uint32_t c, float z) {
+    TX_.screen[idx] = c;
+    TX_.depth_buffer[idx] = z;
+}
+
 static int tx_codepoint_length_(uint32_t c) {
     if (c <= 0x7F) {
         return 1;
@@ -543,6 +640,180 @@ static int tx_codepoint_length_(uint32_t c) {
 static void tx_move_cursor_to_origin_(void) {
     printf("\x1b[H");
 }
+
+static TxKeyCode tx_convert_to_keycode(int code) {
+#ifdef _WIN32
+    #error "Converting from native keycode to TxKeyCode on Windows not yet supported"
+#elif __linux__
+    #error "Converting from native keycode to TxKeyCode on Linux not yet supported"
+#elif __APPLE__
+    switch (code) {
+        case 0:   return 'a';
+        case 1:   return 's';
+        case 2:   return 'd';
+        case 3:   return 'f';
+        case 4:   return 'h';
+        case 5:   return 'g';
+        case 6:   return 'z';
+        case 7:   return 'x';
+        case 8:   return 'c';
+        case 9:   return 'v';
+        case 11:  return 'b';
+        case 12:  return 'q';
+        case 13:  return 'w';
+        case 14:  return 'e';
+        case 15:  return 'r';
+        case 16:  return 'y';
+        case 17:  return 't';
+        case 18:  return '1';
+        case 19:  return '2';
+        case 20:  return '3';
+        case 21:  return '4';
+        case 22:  return '6';
+        case 23:  return '5';
+        case 24:  return '=';
+        case 25:  return '9';
+        case 26:  return '7';
+        case 27:  return '-';
+        case 28:  return '8';
+        case 29:  return '0';
+        case 30:  return ']';
+        case 31:  return 'o';
+        case 32:  return 'u';
+        case 33:  return '[';
+        case 34:  return 'i';
+        case 35:  return 'p';
+        case 37:  return 'l';
+        case 38:  return 'j';
+        case 39:  return '\'';
+        case 40:  return 'k';
+        case 41:  return ';';
+        case 42:  return '\\';
+        case 43:  return ',';
+        case 44:  return '/';
+        case 45:  return 'n';
+        case 46:  return 'm';
+        case 47:  return '.';
+        case 50:  return '`';
+        case 65:  return TxKeyCode_DECIMAL;
+        case 67:  return '*';
+        case 69:  return TxKeyCode_PLUS;
+        case 71:  return TxKeyCode_CLEAR;
+        case 75:  return TxKeyCode_DIVIDE;
+        case 76:  return TxKeyCode_ENTER;
+        case 78:  return TxKeyCode_HYPHEN;
+        case 81:  return TxKeyCode_EQUALS;
+        case 82:  return '0';
+        case 83:  return '1';
+        case 84:  return '2';
+        case 85:  return '3';
+        case 86:  return '4';
+        case 87:  return '5';
+        case 88:  return '6';
+        case 89:  return '7';
+        case 91:  return '8';
+        case 92:  return '9';
+        case 36:  return TxKeyCode_ENTER; // TxKeyCode_RET; TODO: Is this correct?
+        case 48:  return TxKeyCode_TAB;
+        case 49:  return ' ';
+        case 51:  return TxKeyCode_BACKSPACE;
+        case 53:  return TxKeyCode_ESC;
+        case 54:  return TxKeyCode_RIGHT_CMD; // Mac specific
+        case 55:  return TxKeyCode_LEFT_CMD; // Mac specific
+        case 56:  return TxKeyCode_LEFT_SHIFT;
+        case 57:  return TxKeyCode_CAPS;
+        case 58:  return TxKeyCode_LEFT_OPTION;
+        case 59:  return TxKeyCode_LEFT_CTRL;
+        case 60:  return TxKeyCode_RIGHT_SHIFT;
+        case 61:  return TxKeyCode_RIGHT_OPTION;
+        case 62:  return TxKeyCode_RIGHT_CTRL;
+        case 63:  return TxKeyCode_FN;
+        case 64:  return TxKeyCode_F17;
+        case 72:  return TxKeyCode_VOLUME_UP;
+        case 73:  return TxKeyCode_VOLUME_DOWN;
+        case 74:  return TxKeyCode_VOLUME_MUTE;
+        case 79:  return TxKeyCode_F18;
+        case 80:  return TxKeyCode_F19;
+        case 90:  return TxKeyCode_F20;
+        case 96:  return TxKeyCode_F5;
+        case 97:  return TxKeyCode_F6;
+        case 98:  return TxKeyCode_F7;
+        case 99:  return TxKeyCode_F3;
+        case 100: return TxKeyCode_F8;
+        case 101: return TxKeyCode_F9;
+        case 103: return TxKeyCode_F11;
+        case 105: return TxKeyCode_F13;
+        case 106: return TxKeyCode_F16;
+        case 107: return TxKeyCode_F14;
+        case 109: return TxKeyCode_F10;
+        case 111: return TxKeyCode_F12;
+        case 113: return TxKeyCode_F15;
+        case 114: return TxKeyCode_HELP;
+        case 115: return TxKeyCode_HOME;
+        case 116: return TxKeyCode_PG_UP;
+        case 117: return TxKeyCode_DELETE;
+        case 118: return TxKeyCode_F4;
+        case 119: return TxKeyCode_END;
+        case 120: return TxKeyCode_F2;
+        case 121: return TxKeyCode_PG_DOWN;
+        case 122: return TxKeyCode_F1;
+        case 123: return TxKeyCode_ARROW_LEFT;
+        case 124: return TxKeyCode_ARROW_RIGHT;
+        case 125: return TxKeyCode_ARROW_DOWN;
+        case 126: return TxKeyCode_ARROW_UP;
+    }
+    return 0;
+#else
+    #error "Cannot convert from native keycode to TxKeyCode on this platform"
+#endif
+}
+
+#ifdef __APPLE__
+static bool tx_macos_enable_event_tap(void) {
+    CGEventMask event_mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) | CGEventMaskBit(kCGEventFlagsChanged);
+
+    CFMachPortRef event_tap = CGEventTapCreate(
+        kCGSessionEventTap,
+        kCGHeadInsertEventTap,
+        0,
+        event_mask,
+        tx_macos_CGEvent_callback,
+        NULL
+    );
+    if (!event_tap) {
+        tx_error("Failed to create event tap.\n");
+        return false;
+    }
+
+    TX_.macos.run_loop_src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, event_tap, 0);
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), TX_.macos.run_loop_src, kCFRunLoopDefaultMode);
+    CGEventTapEnable(event_tap, true);
+
+    return true;
+}
+
+static CGEventRef tx_macos_CGEvent_callback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void* refcon) {
+    (void)proxy;
+    (void)refcon;
+
+    if (type != kCGEventKeyDown     &&
+        type != kCGEventKeyUp       &&
+        type != kCGEventFlagsChanged)
+    {
+        return event;
+    }
+
+    CGKeyCode code = (CGKeyCode)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
+
+    TxKeyCode key = tx_convert_to_keycode((int)code);
+
+    if      (type == kCGEventKeyDown)      TX_.keys[key] = TxKeyState_PRESSED;
+    else if (type == kCGEventKeyUp)        TX_.keys[key] = TxKeyState_RELEASED;
+    else if (type == kCGEventFlagsChanged) tx_dbg("TODO: Handle FlagsChanged event");
+
+    return event;
+}
+#endif // __APPLE__
 
 #endif // _TEMEX_H_IMPLEMENTATION_
 #endif // TX_IMPLEMENTATION

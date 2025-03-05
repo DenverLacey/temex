@@ -21,6 +21,11 @@ project 'block_runner'
         '../..',
     }
 
+    links {
+        'ApplicationServices.framework',
+        'Carbon.framework',
+    }
+
     filter 'action:gmake2'
         buildoptions {
             '-Wpedantic',

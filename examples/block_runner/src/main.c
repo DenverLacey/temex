@@ -31,15 +31,15 @@ int main(void) {
         }
 
         dir = (TxVector){0};
-        if (tx_is_key_pressed('w')) dir.y -= 1.f;
-        if (tx_is_key_pressed('a')) dir.x -= 1.f;
-        if (tx_is_key_pressed('s')) dir.y += 1.f;
-        if (tx_is_key_pressed('d')) dir.x += 1.f;
+        if (tx_is_key_held('w')) dir.y -= 1.f;
+        if (tx_is_key_held('a')) dir.x -= 1.f;
+        if (tx_is_key_held('s')) dir.y += 1.f;
+        if (tx_is_key_held('d')) dir.x += 1.f;
 
         uint32_t pc = get_player_char_for_dir(dir);
         if (pc != 0) p_char = pc;
 
-        TxVector np = TxVector_add(pos, TxVector_mul(dir, (TxVector){2.f, 1.f, 1.f}));
+        TxVector np = TxVector_add(pos, TxVector_mul(dir, (TxVector){0.125f, 0.0675f, 1.f}));
         if (np.x >= 0 && np.x <= tx_get_screen_width() &&
             np.y >= 0 && np.y <= tx_get_screen_height())
         {
